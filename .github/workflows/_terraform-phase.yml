@@ -139,10 +139,15 @@ jobs:
         id: plan
         run: |
           set +e
+          optional_tfvars=()
+          if [[ -f "tfvars/${TFENV}.tfvars" ]]; then
+            optional_tfvars+=("-var-file=tfvars/${TFENV}.tfvars")
+          fi
+
           terraform plan -no-color -input=false -lock=false \
             -detailed-exitcode -out=tfplan \
             -var-file="../../envs/${TFENV}.tfvars" \
-            $( [[ -f "tfvars/${TFENV}.tfvars" ]] && echo -var-file="tfvars/${TFENV}.tfvars" ) \
+            "${optional_tfvars[@]}" \
             2>&1 | tee plan.txt
           code=${PIPESTATUS[0]}
           set -e
