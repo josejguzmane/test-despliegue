@@ -22,7 +22,7 @@ jobs:
         run: python scripts/validate-pipelines.py
 
       - name: Validate GitHub Actions syntax
-        run: docker run --rm -v "$PWD:/repo" rhysd/actionlint:1.7.7
+        run: docker run --rm -v "$GITHUB_WORKSPACE:/repo:ro" -w /repo rhysd/actionlint:1.7.7
 
   terraform:
     name: Terraform static validation
