@@ -235,7 +235,7 @@ jobs:
 
       - name: Guardar el plan como artefacto
         if: always() && steps.plan.conclusion == 'success'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: tfplan-${{ inputs.phase }}-${{ inputs.tf_environment }}-${{ github.run_attempt }}
           path: |
