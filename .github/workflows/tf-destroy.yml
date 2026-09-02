@@ -1,0 +1,52 @@
+# =============================================================================
+# Validacion manual de un entorno completo.
+#
+# Conserva un punto de entrada manual para comprobar todas las fases de un
+# entorno. Solo genera planes de lectura; no destruye ni aplica recursos.
+# =============================================================================
+name: TF validar entorno
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Entorno a validar.'
+        type: choice
+        required: true
+        options: [dev, prod]
+        default: dev
+      terraform_version:
+        description: 'Version de Terraform.'
+        type: string
+        default: 'latest'
+
+concurrency:
+  group: tf-validation-${{ inputs.environment }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  validate:
+    name: validate
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        phase:
+          - 00-foundation
+          - 10-network-hub
+          - 20-network-spoke
+          - 30-data
+          - 40-aks
+          - 50-edge
+          - 60-observability
+          - 70-security
+    uses: ./.github/workflows/_terraform-phase.yml
+    with:
+      phase: ${{ matrix.phase }}
+      tf_environment: ${{ inputs.environment }}
+      terraform_version: ${{ inputs.terraform_version }}
+    secrets: inherit

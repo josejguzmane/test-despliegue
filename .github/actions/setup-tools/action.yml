@@ -1,0 +1,70 @@
+name: setup-tools
+description: Instala tflint, checkov y conftest con cache.
+
+inputs:
+  tflint_version:
+    description: 'Version de tflint (ej. v0.55.0) o "latest".'
+    required: false
+    default: 'latest'
+  checkov_version:
+    description: 'Version de checkov (ej. 3.2.400) o "latest".'
+    required: false
+    default: 'latest'
+  conftest_version:
+    description: 'Version de conftest sin la v (ej. 0.58.0) o "latest".'
+    required: false
+    default: 'latest'
+
+runs:
+  using: composite
+  steps:
+    # NOTA DE SUPPLY CHAIN: por defecto estas herramientas se instalan en su
+    # ultima version. Antes de considerar el pipeline productivo, fija las tres
+    # a una version concreta en el llamador para que un release roto de un
+    # tercero no rompa el despliegue.
+    - name: Cache de binarios
+      uses: actions/cache@v4
+      with:
+        path: ~/.local/bin
+        key: tools-${{ runner.os }}-${{ inputs.tflint_version }}-${{ inputs.conftest_version }}
+
+    - name: Instalar tflint
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.local/bin
+        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+        if command -v tflint >/dev/null 2>&1; then tflint --version; exit 0; fi
+        if [[ "${{ inputs.tflint_version }}" != "latest" ]]; then
+          export TFLINT_VERSION="${{ inputs.tflint_version }}"
+        fi
+        curl -fsSL https://raw.githubusercontent.com/terraform-linters/tflint/master/install_linux.sh \
+          | env TFLINT_INSTALL_PATH="$HOME/.local/bin" bash
+        tflint --version
+
+    - name: Instalar conftest
+      shell: bash
+      run: |
+        set -euo pipefail
+        mkdir -p ~/.local/bin
+        if [[ -x ~/.local/bin/conftest ]]; then ~/.local/bin/conftest --version; exit 0; fi
+        version="${{ inputs.conftest_version }}"
+        if [[ "$version" == "latest" ]]; then
+          version="$(curl -fsSL https://api.github.com/repos/open-policy-agent/conftest/releases/latest \
+            | grep -m1 '"tag_name"' | cut -d'"' -f4 | sed 's/^v//')"
+        fi
+        curl -fsSL "https://github.com/open-policy-agent/conftest/releases/download/v${version}/conftest_${version}_Linux_x86_64.tar.gz" \
+          | tar -xz -C ~/.local/bin conftest
+        chmod +x ~/.local/bin/conftest
+        ~/.local/bin/conftest --version
+
+    - name: Instalar checkov
+      shell: bash
+      run: |
+        set -euo pipefail
+        if [[ "${{ inputs.checkov_version }}" == "latest" ]]; then
+          pipx install checkov
+        else
+          pipx install "checkov==${{ inputs.checkov_version }}"
+        fi
+        checkov --version

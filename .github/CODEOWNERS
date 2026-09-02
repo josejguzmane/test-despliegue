@@ -1,0 +1,12 @@
+# Revision obligatoria por equipo. Ajusta los handles a los reales del org.
+*                       @plataforma-itsm
+
+# Los cambios de red y de seguridad tocan la superficie de exposicion:
+# requieren tambien al equipo de seguridad.
+/infra/phases/10-network-hub/   @plataforma-itsm @seguridad
+/infra/phases/20-network-spoke/ @plataforma-itsm @seguridad
+/infra/phases/50-edge/          @plataforma-itsm @seguridad
+/infra/phases/70-security/      @seguridad
+/policy/                        @seguridad
+/bootstrap/                     @plataforma-itsm @seguridad
+/.github/workflows/             @plataforma-itsm @seguridad

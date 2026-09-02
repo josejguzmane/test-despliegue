@@ -1,0 +1,49 @@
+# =============================================================================
+# Validacion manual de una sola fase.
+#
+# Ejecuta todas las comprobaciones y genera un plan de solo lectura para una
+# fase y un entorno concretos. El plan nunca se aplica.
+# =============================================================================
+name: TF validar fase individual
+
+on:
+  workflow_dispatch:
+    inputs:
+      phase:
+        description: 'Fase a validar.'
+        type: choice
+        required: true
+        options:
+          - 00-foundation
+          - 10-network-hub
+          - 20-network-spoke
+          - 30-data
+          - 40-aks
+          - 50-edge
+          - 60-observability
+          - 70-security
+      environment:
+        description: 'Entorno a validar.'
+        type: choice
+        required: true
+        options: [dev, prod]
+        default: dev
+      terraform_version:
+        description: 'Version de Terraform.'
+        type: string
+        default: 'latest'
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    name: validate ${{ inputs.phase }}
+    uses: ./.github/workflows/_terraform-phase.yml
+    with:
+      phase: ${{ inputs.phase }}
+      tf_environment: ${{ inputs.environment }}
+      terraform_version: ${{ inputs.terraform_version }}
+    secrets: inherit

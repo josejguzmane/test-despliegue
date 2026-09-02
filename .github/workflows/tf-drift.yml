@@ -1,0 +1,73 @@
+# =============================================================================
+# Deteccion de deriva.
+#
+# Todos los dias planifica todas las fases de todos los entornos con la
+# identidad de solo lectura. Si alguna reporta cambios, alguien toco Azure a
+# mano y el codigo dejo de describir la realidad: se abre una incidencia.
+#
+# Es el equivalente, a nivel de infraestructura, de lo que Flux hace dentro del
+# cluster reconciliando contra el repositorio (seccion 9).
+# =============================================================================
+name: TF deteccion de deriva
+
+on:
+  schedule:
+    - cron: '0 7 * * *'
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+jobs:
+  plan:
+    name: drift
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        environment: [dev, prod]
+        phase:
+          - 00-foundation
+          - 10-network-hub
+          - 20-network-spoke
+          - 30-data
+          - 40-aks
+          - 50-edge
+          - 60-observability
+          - 70-security
+    uses: ./.github/workflows/_terraform-phase.yml
+    with:
+      phase: ${{ matrix.phase }}
+      tf_environment: ${{ matrix.environment }}
+      fail_on_changes: true
+    secrets: inherit
+
+  report:
+    name: Reportar deriva
+    needs: plan
+    if: always() && needs.plan.result == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Abrir o actualizar la incidencia
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Deriva de infraestructura detectada"
+          body=$(printf '%s\n' \
+            "El plan diario encontro diferencias entre el codigo y Azure." \
+            "" \
+            "Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" \
+            "" \
+            "Revisa el plan de cada fase en el resumen del run. Si el cambio en Azure" \
+            "es legitimo, incorporalo al codigo; si no, reaplica la fase para revertirlo.")
+
+          existing=$(gh issue list --state open --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [[ -n "$existing" ]]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --body "$body" --label infra
+          fi

@@ -1,0 +1,23 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [infra, dependencies]
+
+  - package-ecosystem: terraform
+    directories:
+      - /infra/phases/00-foundation
+      - /infra/phases/10-network-hub
+      - /infra/phases/20-network-spoke
+      - /infra/phases/30-data
+      - /infra/phases/40-aks
+      - /infra/phases/50-edge
+      - /infra/phases/60-observability
+      - /infra/phases/70-security
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    labels: [infra, dependencies]

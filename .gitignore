@@ -1,0 +1,30 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.json
+crash.log
+crash.*.log
+.terraform.lock.hcl.bak
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+
+# Secretos / locales: NUNCA commitear
+*.auto.tfvars
+local.tfvars
+.env
+.env.*
+bootstrap/outputs/*
+!bootstrap/outputs/.gitkeep
+
+# Tooling
+.tflint.d/
+.checkov/
+*.log
+tmp/
+.DS_Store

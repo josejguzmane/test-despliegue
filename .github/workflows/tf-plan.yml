@@ -1,0 +1,85 @@
+# =============================================================================
+# Plan en pull request.
+#
+# Planifica contra dev con la identidad de solo lectura y publica el resultado
+# como comentario. Nunca aplica el plan ni modifica recursos de Azure.
+# =============================================================================
+name: TF plan (PR)
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'infra/**'
+      - 'policy/**'
+      - 'scripts/**'
+      - '.github/workflows/**'
+      - '.github/actions/**'
+
+concurrency:
+  group: tf-plan-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  detect:
+    name: Detectar fases afectadas
+    runs-on: ubuntu-latest
+    # Los PR desde un fork no reciben token OIDC ni acceso a las variables del
+    # repositorio: se detiene antes en vez de fallar a medias.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    outputs:
+      phases: ${{ steps.detect.outputs.phases }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - id: detect
+        run: |
+          phases="$(./scripts/changed-phases.sh origin/${{ github.base_ref }})"
+          echo "phases=$phases" >> "$GITHUB_OUTPUT"
+          echo "Fases a planificar: $phases"
+          {
+            echo "### Fases afectadas"
+            echo
+            echo "\`$phases\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  plan:
+    name: plan
+    needs: detect
+    if: needs.detect.outputs.phases != '[]'
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        phase: ${{ fromJson(needs.detect.outputs.phases) }}
+    uses: ./.github/workflows/_terraform-phase.yml
+    with:
+      phase: ${{ matrix.phase }}
+      tf_environment: dev
+      comment_on_pr: true
+    secrets: inherit
+
+  gate:
+    name: Resultado del plan
+    needs: [detect, plan]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar
+        run: |
+          if [[ "${{ needs.detect.result }}" == "skipped" ]]; then
+            echo "::error::PR desde un fork: el plan no puede correr porque no hay credenciales OIDC."
+            exit 1
+          fi
+          if [[ "${{ needs.plan.result }}" == "failure" ]]; then
+            echo "::error::Al menos una fase fallo en plan."
+            exit 1
+          fi
+          echo "Plan completo."

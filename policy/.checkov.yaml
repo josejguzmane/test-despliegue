@@ -1,0 +1,19 @@
+# Configuracion de checkov. Se pasa con --config-file policy/.checkov.yaml.
+framework:
+  - terraform
+  - terraform_plan
+
+quiet: true
+compact: true
+download-external-modules: false
+
+skip-check:
+  # CKV_AZURE_206: el ZRS del state se decide en el bootstrap, no en Terraform.
+  - CKV_AZURE_206
+  # CKV2_AZURE_1 / CKV2_AZURE_18: CMK en Storage se introduce junto con la
+  # rotacion de llaves de la fase 30; hasta entonces seria ruido en cada PR.
+  - CKV2_AZURE_1
+  - CKV2_AZURE_18
+
+# Los hallazgos deben bloquear CI para que todas las validaciones sean obligatorias.
+soft-fail: false

@@ -1,0 +1,47 @@
+name: Pipeline validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  pipeline:
+    name: Pipeline safety and syntax
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reject deployment commands
+        run: python scripts/validate-pipelines.py
+
+      - name: Validate GitHub Actions syntax
+        run: docker run --rm -v "$PWD:/repo" rhysd/actionlint:1.7.7
+
+  terraform:
+    name: Terraform static validation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+          terraform_wrapper: false
+
+      - name: Check shared variables
+        run: make check-common
+
+      - name: Check Terraform formatting
+        run: make fmt-check
+
+      - name: Validate Terraform configuration
+        run: make validate

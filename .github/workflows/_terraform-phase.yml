@@ -1,0 +1,245 @@
+# =============================================================================
+# Workflow reutilizable: valida una fase de Terraform.
+#
+# Es el unico lugar donde se invoca terraform en CI. Todos los llamadores usan
+# la identidad de solo lectura y ejecutan fmt, validate, lint, plan y politicas.
+# Este workflow no contiene ninguna ruta de apply o destroy.
+# =============================================================================
+name: terraform-phase
+
+on:
+  workflow_call:
+    inputs:
+      phase:
+        description: 'Fase a validar, ej. 10-network-hub.'
+        required: true
+        type: string
+      tf_environment:
+        description: 'Entorno de Terraform: dev | qa | prod.'
+        required: true
+        type: string
+      terraform_version:
+        description: 'Version de Terraform. Fijar a una version concreta antes de produccion.'
+        required: false
+        type: string
+        default: 'latest'
+      comment_on_pr:
+        description: 'Publica el plan como comentario en el PR.'
+        required: false
+        type: boolean
+        default: false
+      fail_on_changes:
+        description: 'Falla el job si el plan detecta cambios. Lo usa la deteccion de deriva: en una matriz, los outputs por job no son fiables, pero el estado del job si.'
+        required: false
+        type: boolean
+        default: false
+    outputs:
+      has_changes:
+        description: 'true si el plan detecto cambios pendientes.'
+        value: ${{ jobs.terraform.outputs.has_changes }}
+
+permissions:
+  id-token: write
+  contents: read
+  pull-requests: write
+
+jobs:
+  terraform:
+    name: validate ${{ inputs.phase }} (${{ inputs.tf_environment }})
+    runs-on: ubuntu-latest
+
+    # Evita duplicar validaciones de la misma fase y entorno.
+    concurrency:
+      group: tf-${{ inputs.phase }}-${{ inputs.tf_environment }}
+      cancel-in-progress: false
+
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+
+    defaults:
+      run:
+        shell: bash
+        working-directory: infra/phases/${{ inputs.phase }}
+
+    env:
+      ARM_USE_OIDC: 'true'
+      ARM_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      ARM_STORAGE_USE_AZUREAD: 'true'
+      TF_IN_AUTOMATION: 'true'
+      TF_INPUT: 'false'
+      TF_VAR_tfstate_resource_group_name: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+      TF_VAR_tfstate_storage_account_name: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+      TF_VAR_tfstate_container_name: ${{ vars.TFSTATE_CONTAINER }}
+      PHASE: ${{ inputs.phase }}
+      TFENV: ${{ inputs.tf_environment }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Comprobar configuracion del repositorio
+        working-directory: .
+        run: |
+          missing=()
+          for v in AZURE_CLIENT_ID AZURE_TENANT_ID AZURE_SUBSCRIPTION_ID \
+                   TFSTATE_RESOURCE_GROUP TFSTATE_STORAGE_ACCOUNT TFSTATE_CONTAINER; do
+            [[ -n "${!v:-}" ]] || missing+=("$v")
+          done
+          if [[ ${#missing[@]} -gt 0 ]]; then
+            echo "::error::Faltan variables de GitHub: ${missing[*]}. Corre bootstrap y carga bootstrap/outputs/github-config.md."
+            exit 1
+          fi
+        env:
+          AZURE_CLIENT_ID: ${{ vars.AZURE_CLIENT_ID }}
+          AZURE_TENANT_ID: ${{ vars.AZURE_TENANT_ID }}
+          AZURE_SUBSCRIPTION_ID: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+          TFSTATE_RESOURCE_GROUP: ${{ vars.TFSTATE_RESOURCE_GROUP }}
+          TFSTATE_STORAGE_ACCOUNT: ${{ vars.TFSTATE_STORAGE_ACCOUNT }}
+          TFSTATE_CONTAINER: ${{ vars.TFSTATE_CONTAINER }}
+
+      - name: Verificar que variables.common.tf esta sincronizado
+        working-directory: .
+        run: ./scripts/sync-common.sh --check
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ inputs.terraform_version }}
+          terraform_wrapper: false
+
+      - name: Setup de herramientas de analisis
+        uses: ./.github/actions/setup-tools
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init
+        run: |
+          terraform init -input=false -reconfigure \
+            -backend-config="resource_group_name=${{ vars.TFSTATE_RESOURCE_GROUP }}" \
+            -backend-config="storage_account_name=${{ vars.TFSTATE_STORAGE_ACCOUNT }}" \
+            -backend-config="container_name=${{ vars.TFSTATE_CONTAINER }}" \
+            -backend-config="key=${PHASE}/${TFENV}.tfstate" \
+            -backend-config="subscription_id=${ARM_SUBSCRIPTION_ID}" \
+            -backend-config="use_azuread_auth=true"
+
+      - name: terraform validate
+        run: terraform validate -no-color
+
+      - name: tflint
+        working-directory: .
+        run: |
+          tflint --init --config="$PWD/policy/.tflint.hcl"
+          tflint --config="$PWD/policy/.tflint.hcl" \
+                 --chdir="infra/phases/${PHASE}" --format compact
+
+      - name: terraform plan
+        id: plan
+        run: |
+          set +e
+          terraform plan -no-color -input=false -lock=false \
+            -detailed-exitcode -out=tfplan \
+            -var-file="../../envs/${TFENV}.tfvars" \
+            $( [[ -f "tfvars/${TFENV}.tfvars" ]] && echo -var-file="tfvars/${TFENV}.tfvars" ) \
+            2>&1 | tee plan.txt
+          code=${PIPESTATUS[0]}
+          set -e
+
+          case "$code" in
+            0) echo "has_changes=false" >> "$GITHUB_OUTPUT" ;;
+            2) echo "has_changes=true"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::terraform plan fallo con codigo $code"; exit "$code" ;;
+          esac
+
+          terraform show -json tfplan > tfplan.json
+
+      - name: conftest (politicas del repositorio)
+        run: |
+          conftest test tfplan.json \
+            --policy "$GITHUB_WORKSPACE/policy/opa" \
+            --parser json \
+            --all-namespaces \
+            --no-color
+
+      - name: checkov
+        run: |
+          checkov -f tfplan.json \
+            --config-file "$GITHUB_WORKSPACE/policy/.checkov.yaml" \
+            --output cli --output-file-path console \
+            --repo-root-for-plan-enrichment "$GITHUB_WORKSPACE"
+
+      - name: Resumen del plan
+        if: always() && steps.plan.conclusion == 'success'
+        run: |
+          {
+            echo "## \`${PHASE}\` / \`${TFENV}\` - validation"
+            echo
+            if [[ "${{ steps.plan.outputs.has_changes }}" == "true" ]]; then
+              echo "Hay cambios pendientes."
+            else
+              echo "Sin cambios: la infraestructura coincide con el codigo."
+            fi
+            echo
+            echo '<details><summary>Plan</summary>'
+            echo
+            echo '```terraform'
+            tail -c 60000 plan.txt
+            echo '```'
+            echo
+            echo '</details>'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Fallar si hay deriva
+        if: inputs.fail_on_changes && steps.plan.outputs.has_changes == 'true'
+        run: |
+          echo "::error::${PHASE}/${TFENV} tiene cambios pendientes: el codigo y Azure no coinciden."
+          exit 1
+
+      - name: Comentar el plan en el PR
+        if: inputs.comment_on_pr && github.event_name == 'pull_request' && steps.plan.conclusion == 'success'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HAS_CHANGES: ${{ steps.plan.outputs.has_changes }}
+        run: |
+          marker="<!-- tf-plan:${PHASE}:${TFENV} -->"
+          status="sin cambios"
+          [[ "$HAS_CHANGES" == "true" ]] && status="**con cambios**"
+
+          {
+            echo "$marker"
+            echo "### Terraform plan - \`${PHASE}\` / \`${TFENV}\` ($status)"
+            echo
+            echo '<details><summary>Ver plan</summary>'
+            echo
+            echo '```terraform'
+            tail -c 55000 plan.txt
+            echo '```'
+            echo
+            echo '</details>'
+          } > comment.md
+
+          # Se actualiza el comentario existente en vez de acumular uno por push.
+          existing=$(gh api "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" --paginate \
+            --jq "[.[] | select(.body | startswith(\"$marker\"))] | first | .id // empty")
+
+          if [[ -n "$existing" ]]; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/issues/comments/${existing}" \
+              -F body=@comment.md >/dev/null
+          else
+            gh api --method POST "repos/${GITHUB_REPOSITORY}/issues/${PR_NUMBER}/comments" \
+              -F body=@comment.md >/dev/null
+          fi
+
+      - name: Guardar el plan como artefacto
+        if: always() && steps.plan.conclusion == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ inputs.phase }}-${{ inputs.tf_environment }}-${{ github.run_attempt }}
+          path: |
+            infra/phases/${{ inputs.phase }}/plan.txt
+            infra/phases/${{ inputs.phase }}/tfplan.json
+          retention-days: 30
+          if-no-files-found: warn
