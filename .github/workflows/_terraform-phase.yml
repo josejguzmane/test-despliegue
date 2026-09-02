@@ -38,11 +38,6 @@ on:
         description: 'true si el plan detecto cambios pendientes.'
         value: ${{ jobs.terraform.outputs.has_changes }}
 
-permissions:
-  id-token: write
-  contents: read
-  pull-requests: write
-
 jobs:
   terraform:
     name: validate ${{ inputs.phase }} (${{ inputs.tf_environment }})
