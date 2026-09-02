@@ -37,6 +37,9 @@ jobs:
           terraform_version: 1.10.5
           terraform_wrapper: false
 
+      - name: Make sync script executable
+        run: chmod +x ./scripts/sync-common.sh
+
       - name: Check shared variables
         run: make check-common
 
